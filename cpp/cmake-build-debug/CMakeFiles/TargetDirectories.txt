@@ -1,0 +1,3 @@
+/home/nana/Gyyyyy/Projects/MyAlphaGo/cpp/cmake-build-debug/CMakeFiles/MyAlphaGo.dir
+/home/nana/Gyyyyy/Projects/MyAlphaGo/cpp/cmake-build-debug/CMakeFiles/edit_cache.dir
+/home/nana/Gyyyyy/Projects/MyAlphaGo/cpp/cmake-build-debug/CMakeFiles/rebuild_cache.dir
