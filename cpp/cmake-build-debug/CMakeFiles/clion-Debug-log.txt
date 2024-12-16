@@ -1,4 +1,0 @@
-/home/nana/.cache/JetBrains/RemoteDev/dist/5dc3f598cfaa5_CLion-243.21565.198/bin/cmake/linux/x64/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/home/nana/.cache/JetBrains/RemoteDev/dist/5dc3f598cfaa5_CLion-243.21565.198/bin/ninja/linux/x64/ninja -G Ninja -S /home/nana/Gyyyyy/Projects/MyAlphaGo/cpp -B /home/nana/Gyyyyy/Projects/MyAlphaGo/cpp/cmake-build-debug
--- Configuring done (0.0s)
--- Generating done (0.0s)
--- Build files have been written to: /home/nana/Gyyyyy/Projects/MyAlphaGo/cpp/cmake-build-debug

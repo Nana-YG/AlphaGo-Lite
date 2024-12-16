@@ -3,4 +3,10 @@ project(MyAlphaGo)
 
 set(CMAKE_CXX_STANDARD 20)
 
-add_executable(MyAlphaGo main.cpp)
+add_subdirectory(GTP-Core/cpp)
+include_directories(GTP-Core/cpp/src)
+
+add_executable(MyAlphaGo
+        src/main.cpp
+        # other MyAlphaGo source files...
+)
