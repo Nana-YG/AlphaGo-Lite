@@ -6,6 +6,7 @@
 # Directories
 INPUT_BASE_DIR="./Dataset/sgf"    # Input SGF root directory
 OUTPUT_BASE_DIR="./Dataset/h5"    # Output HDF5 root directory
+MERGE_DIR="./Dataset/board-move-pairs" # Merged HDF5 directory
 GTP_CORE_EXEC="./cpp/GTP-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
 
 # Ensure GTP-Core exists
@@ -30,7 +31,6 @@ process_sgf_dir() {
             mkdir -p "$output_sub_dir"
 
             echo "Processing folder: $folder -> $output_sub_dir"
-            echo "Converting $folder -> $output_sub_dir"
             "$GTP_CORE_EXEC" ReadData "$folder" "$output_sub_dir"
         fi
     done
@@ -41,6 +41,13 @@ clean_hdf5() {
     echo "Cleaning all HDF5 files in $OUTPUT_BASE_DIR..."
     find "$OUTPUT_BASE_DIR" -type f -name "*.h5" -delete
     echo "All HDF5 files have been removed."
+}
+
+# Function to merge all HDF5 files
+merge_hdf5() {
+    echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
+    "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1 "$MERGE_DIR"-$1.h5
+    echo "All HDF5 files have been merged."
 }
 
 # Main script logic
@@ -54,6 +61,14 @@ case "$1" in
         process_sgf_dir "$INPUT_BASE_DIR/train" "$OUTPUT_BASE_DIR/train"
         process_sgf_dir "$INPUT_BASE_DIR/val" "$OUTPUT_BASE_DIR/val"
         echo "SGF to HDF5 conversion completed successfully."
+        ;;
+    merge)
+        echo "Starting HDF5 merge..."
+        if [ $# -lt 2 ]; then
+            echo "Usage: ./processSGF merge [train/test/val]"
+        fi
+        merge_hdf5 $2
+        echo "HDF5 merge completed successfully."
         ;;
     *)
         echo "Usage: $0 {process|clean}"
