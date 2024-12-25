@@ -53,14 +53,23 @@ class GoDataset(Dataset):
 
         group = self.h5_file[group_name]
         print(">>> Loaded: Index =", idx, "Group =", group_name, "Local =", local_idx)
-        board = group[f"board_{local_idx}"][:]
-        liberty = group[f"liberty_{local_idx}"][:]
-        label = group[f"nextMove_{local_idx}"][:]
 
-        print("Board =\n", board)
-        print("Liberty =\n", liberty)
-        print("Label =\n", label)
-        print("<<<\n")
+        try:
+            group = self.h5_file[group_name]
+            board = group[f"board_{local_idx}"][:]
+            liberty = group[f"liberty_{local_idx}"][:]
+            label = group[f"nextMove_{local_idx}"][:]
+        except Exception as e:
+            print(f"Error loading data at idx {idx}, group {group_name}, local_idx {local_idx}: {e}")
+            # Use default values in case of error
+            board = np.zeros((19, 19), dtype=np.float32)  # Default board filled with zeros
+            liberty = np.zeros((19, 19), dtype=np.float32)  # Default liberty filled with zeros
+            label = np.array([3, 3], dtype=np.int64)  # Default label at position (3, 3)
+
+        # print("Board =\n", board)
+        # print("Liberty =\n", liberty)
+        # print("Label =\n", label)
+        # print("<<<\n")
 
         # Check dimension
         if board.shape != (19, 19):
@@ -68,8 +77,9 @@ class GoDataset(Dataset):
         if liberty.shape != (19, 19):
             raise ValueError(f"Invalid liberty shape: {liberty.shape}")
 
-        # Combine to tensor
-        input_tensor = torch.tensor([board, liberty], dtype=torch.float32)
+        # Combine board and liberty into a single NumPy array and then convert to Tensor
+        combined_array = np.stack([board, liberty], axis=0)  # Shape: (2, 19, 19)
+        input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
         return input_tensor, label_tensor
@@ -95,25 +105,81 @@ class GoNet(nn.Module):
         x = self.fc2(x)
         return x
 
+    def predict(self, input_tensor):
+        self.eval()  # Set the model to evaluation mode
+        with torch.no_grad():
+            output = self(input_tensor.unsqueeze(0))  # Add batch dimension
+            _, predicted = torch.max(output, 1)
+        row, col = divmod(predicted.item(), 19)
+        return row, col
+
+    def calculate_accuracy(self, model, test_loader):
+        model.eval()
+        correct = 0
+        total = 0
+
+        with torch.no_grad():
+            for inputs, labels in test_loader:
+                outputs = model(inputs)
+
+                # Convert (row, col) to single index for prediction and comparison
+                outputs = model(inputs)
+                _, predicted = torch.max(outputs, 1)
+                target_indices = labels[:, 0] * 19 + labels[:, 1]
+
+                correct += (predicted == target_indices).sum().item()
+                total += labels.size(0)
+
+        accuracy = correct / total
+        return accuracy
+
 # Training function
-def train_model(model, train_loader, criterion, optimizer, num_epochs=10000):
-    for epoch in range(num_epochs):
-        model.train()
-        total_loss = 0
+def train(model, train_loader, test_loader, criterion, optimizer, max_epoch):
 
-        for inputs, labels in train_loader:
-            optimizer.zero_grad()
-            outputs = model(inputs)
+    data_iter = iter(train_loader)
 
-            # Convert (row, col) to single index for loss calculation
-            target_indices = labels[:, 0] * 19 + labels[:, 1]
-            loss = criterion(outputs, target_indices)
-            loss.backward()
-            optimizer.step()
+    for epoch in range(max_epoch):
 
-            total_loss += loss.item()
+        # Get one batch
+        inputs, labels = next(data_iter)
 
-        print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss / len(train_loader):.4f}")
+        print(f"Epoch {epoch + 1}/10000")
+        train_one_epoch(model, inputs, labels, criterion, optimizer)
+        print("Evaluating on test set...")
+        accuracy = model.calculate_accuracy(model, test_loader)
+        print(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.8f}")
+
+
+def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, ):
+    model.train()
+    total_loss = 0
+    total_samples = 0
+
+    for inputs, labels in input_batch, label_batch:
+
+        # Move inputs and labels to the same device as the model
+        inputs, labels = inputs.to(device), labels.to(device)
+
+        # Forward pass
+        optimizer.zero_grad()
+        outputs = model(inputs)
+
+        # Convert (row, col) to single index for loss calculation
+        target_indices = labels[:, 0] * 19 + labels[:, 1]
+        loss = criterion(outputs, target_indices)
+
+        # Backward pass and optimization
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * inputs.size(0)  # Multiply by batch size
+        total_samples += inputs.size(0)  # Count total samples
+
+    average_loss = total_loss / total_samples  # Compute average loss
+    print(f"Training Loss: {average_loss:.4f}")
+    return average_loss
+
+
 
 if __name__ == "__main__":
 
@@ -126,24 +192,37 @@ if __name__ == "__main__":
     #         print(name, "->", obj)
     #     f.visititems(print_structure)
 
-
-    # Load data
-    print(">>> Main: Loading dataset...")
+    # Load data with mini-batch size
+    print(">>> Main: Loading datasets...")
     train_dataset = GoDataset('Dataset/board-move-pairs-train.h5')
-    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+    test_dataset = GoDataset('Dataset/board-move-pairs-test.h5')
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+
+
 
     # Initialize model, loss function, and optimizer
     print(">>> Main: Initializing model...")
+
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+        print("GPU not available. Using CPU instead.")
+    print(f"Using device: {device}\n")
+
     model = GoNet()
+    model.to(device)
     criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.001)
 
     # Train the model
     print(">>> Main: Start training...")
-    train_model(model, train_loader, criterion, optimizer, num_epochs=10000)
+    train(model, train_loader, test_loader, criterion, optimizer, max_epoch = 100000)
 
     # Save the model
     print(">>> Main: Training finished. Saving model...")
     torch.save(model.state_dict(), 'go_model.pth')
-
     print(">>> Main: Model saved.")
