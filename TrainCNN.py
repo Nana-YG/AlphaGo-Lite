@@ -5,37 +5,62 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+import bisect
 
 # Define Dataset for HDF5
 class GoDataset(Dataset):
     def __init__(self, h5_file):
         self.h5_file = h5py.File(h5_file, 'r')
-        self.boards = []
-        self.liberties = []
-        self.labels = []
+        self.group_names = list(self.h5_file.keys())
 
-        for group_name in self.h5_file.keys():
+        # Load start indices for each group
+        print("Reading startingIndex from file...")
+        self.start_indices = {}
+        for group_name in self.group_names:
             group = self.h5_file[group_name]
-            for key in group.keys():
-                if key.startswith("board"):
-                    self.boards.append(group[key][:])  # Load borad
-                elif key.startswith("liberty"):
-                    self.liberties.append(group[key][:])  # Load Liberty
-                elif key.startswith("nextMove"):
-                    self.labels.append(group[key][:])  # Load label
+            if "startingIndex" in group.keys():
+                self.start_indices[group_name] = int(group["startingIndex"][()])
+            else:
+                raise ValueError(f"Group {group_name} does not have a startingIndex attribute.")
 
-        # Change to numpy
-        self.boards = np.array(self.boards)
-        self.liberties = np.array(self.liberties)
-        self.labels = np.array(self.labels)
+        # Sort groups by startingIndex
+        print("Sorting group keys...")
+        self.group_names = sorted(
+            self.group_names, key=lambda name: self.start_indices[name]
+        )
 
     def __len__(self):
-        return len(self.boards)
+        print("Calculating length of dataset...")
+        # length = 0
+        # for group in self.group_names:
+        #     group_keys = self.h5_file[group].keys()  # get all keys from current group
+        #     # print("Group keys:", group_keys)
+        #     length += len(group_keys)
+        #
+        # print ("Length =", length // 3)
+        return 106047633
+
 
     def __getitem__(self, idx):
-        board = self.boards[idx]
-        liberty = self.liberties[idx]
-        label = self.labels[idx]
+
+        # Use binary search to find the correct group
+        start_values = [self.start_indices[name] for name in self.group_names]
+        group_idx = bisect.bisect_right(start_values, idx) - 1
+        group_name = self.group_names[group_idx]
+
+        # Calculate the local index within the group
+        local_idx = idx - self.start_indices[group_name]
+
+        group = self.h5_file[group_name]
+        print(">>> Loaded: Index =", idx, "Group =", group_name, "Local =", local_idx)
+        board = group[f"board_{local_idx}"][:]
+        liberty = group[f"liberty_{local_idx}"][:]
+        label = group[f"nextMove_{local_idx}"][:]
+
+        print("Board =\n", board)
+        print("Liberty =\n", liberty)
+        print("Label =\n", label)
+        print("<<<\n")
 
         # Check dimension
         if board.shape != (19, 19):
@@ -48,6 +73,7 @@ class GoDataset(Dataset):
         label_tensor = torch.tensor(label, dtype=torch.long)
 
         return input_tensor, label_tensor
+
 
 
 # Define the neural network
@@ -89,27 +115,35 @@ def train_model(model, train_loader, criterion, optimizer, num_epochs=10000):
 
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss / len(train_loader):.4f}")
 
-# Examine the file exist
-print("File exist =", os.path.exists('Dataset/board-move-pairs-training.h5'))
+if __name__ == "__main__":
 
-# # Check h5 file structure
-# with h5py.File('Dataset/board-move-pairs-training.h5', 'r') as f:
-#     def print_structure(name, obj):
-#         print(name, "->", obj)
-#     f.visititems(print_structure)
+    # Examine the file exist
+    print("File exist =", os.path.exists('Dataset/board-move-pairs-train.h5'))
+
+    # # Check h5 file structure
+    # with h5py.File('Dataset/board-move-pairs-training.h5', 'r') as f:
+    #     def print_structure(name, obj):
+    #         print(name, "->", obj)
+    #     f.visititems(print_structure)
 
 
-# Load data
-train_dataset = GoDataset('Dataset/board-move-pairs-training.h5')
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+    # Load data
+    print(">>> Main: Loading dataset...")
+    train_dataset = GoDataset('Dataset/board-move-pairs-train.h5')
+    train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 
-# Initialize model, loss function, and optimizer
-model = GoNet()
-criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+    # Initialize model, loss function, and optimizer
+    print(">>> Main: Initializing model...")
+    model = GoNet()
+    criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-# Train the model
-train_model(model, train_loader, criterion, optimizer, num_epochs=10)
+    # Train the model
+    print(">>> Main: Start training...")
+    train_model(model, train_loader, criterion, optimizer, num_epochs=10000)
 
-# Save the model
-torch.save(model.state_dict(), 'go_model.pth')
+    # Save the model
+    print(">>> Main: Training finished. Saving model...")
+    torch.save(model.state_dict(), 'go_model.pth')
+
+    print(">>> Main: Model saved.")
