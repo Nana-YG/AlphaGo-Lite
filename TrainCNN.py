@@ -6,10 +6,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import bisect
+from torch.optim.lr_scheduler import StepLR
+import torch.nn.init as init
+import matplotlib.pyplot as plt
+import os
+
+last_accuracy = 0
 
 # Define Dataset for HDF5
 class DeviceDataLoader(DataLoader):
-    def __init__(self, *args, device=None, **kwargs):
+    def __init__(self, *args, device, **kwargs):
         super().__init__(*args, **kwargs)
         self.device = device
 
@@ -98,6 +104,9 @@ class GoDataset(Dataset):
         input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
+        if idx % 40000 == 0 and self.type == "test":
+            print('#', end='', flush=True)
+
         return input_tensor, label_tensor
 
 
@@ -106,30 +115,51 @@ class GoDataset(Dataset):
 class GoNet(nn.Module):
     def __init__(self):
         super(GoNet, self).__init__()
-        self.conv1 = nn.Conv2d(2, 64, kernel_size=3, padding=1)  # 2 channels: board and liberty
-        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.fc1 = nn.Linear(256 * 19 * 19, 1024)
-        self.fc2 = nn.Linear(1024, 361)  # Output 361 for 19x19 board positions and 362 for pass
+
+        # 第一层卷积：输入通道 48，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
+        self.conv1 = nn.Conv2d(in_channels=2, out_channels=192, kernel_size=5, stride=1, padding=2)
+
+        # 后续 11 层卷积：输入通道 192，输出通道 192，卷积核大小 3x3，步幅 1，填充 1（保持尺寸）
+        self.hidden_convs = nn.Sequential(
+            *[nn.Conv2d(in_channels=192, out_channels=192, kernel_size=3, stride=1, padding=1) for _ in range(11)]
+        )
+
+        # 输出层：1x1 卷积，输入通道 192，输出通道 1（对应棋盘每个位置的概率）
+        self.output_conv = nn.Conv2d(in_channels=192, out_channels=1, kernel_size=1, stride=1, padding=0)
+
+        # 激活函数
+        self.relu = nn.ReLU()
+
+        # Softmax 层：在 2D 平面上按每个位置归一化概率
+        self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
-        x = torch.relu(self.conv1(x))
-        x = torch.relu(self.conv2(x))
-        x = torch.relu(self.conv3(x))
-        x = x.view(x.size(0), -1)  # Flatten
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
+        # 第一层卷积 + ReLU
+        x = self.relu(self.conv1(x))
+
+        # 11 层隐藏卷积 + ReLU
+        for conv in self.hidden_convs:
+            x = self.relu(conv(x))
+
+        # 最后一层卷积
+        x = self.output_conv(x)
+
+        # 输出概率分布（flatten 为 [batch_size, 361]，然后应用 softmax）
+        x = x.view(x.size(0), -1)  # Flatten to [batch_size, 361]
+        x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
-    def predict(self, input_tensor):
-        self.eval()  # Set the model to evaluation mode
-        with torch.no_grad():
-            output = self(input_tensor.unsqueeze(0))  # Add batch dimension
-            _, predicted = torch.max(output, 1)
-        row, col = divmod(predicted.item(), 19)
-        return row, col
+def initialize_weights(model):
+    if isinstance(model, nn.Conv2d):
+        init.xavier_uniform_(model.weight)  # Xavier 初始化
+        if model.bias is not None:
+            init.zeros_(model.bias)  # 偏置初始化为零
+    elif isinstance(model, nn.Linear):
+        init.kaiming_uniform_(model.weight, nonlinearity='relu')  # He 初始化
+        if model.bias is not None:
+            init.zeros_(model.bias)
 
-def calculate_accuracy(model, test_data, batch_size=512):
+def calculate_accuracy(model, test_data, batch_size):
     model.eval()
     correct = 0
     total = 0
@@ -150,6 +180,10 @@ def calculate_accuracy(model, test_data, batch_size=512):
             target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]
 
             # Accumulate correct predictions
+            # print("predicted shape:", predicted.shape)
+            # print("predicted =", predicted)
+            # print("target indices shape", target_indices.shape)
+            # print("target indices =", target_indices)
             correct += (predicted == target_indices).sum().item()
             total += label_batch.size(0)
 
@@ -159,55 +193,112 @@ def calculate_accuracy(model, test_data, batch_size=512):
 
 
 
+
 # Training function
 def train(model, train_loader, test_data, criterion, optimizer, max_epoch, device):
 
+    # data iterator - manually load data
     data_iter = iter(train_loader)
 
+    # learning rate curve
+    scheduler = StepLR(optimizer, step_size=1000, gamma=0.98)
+
+    # Save accuracies
+    train_accuracy_history = []
+    test_accuracy_history = []
+
     for epoch in range(max_epoch):
+
+        # Scheduler step
+        scheduler.step()
 
         # Get one batch
         inputs, labels = next(data_iter)
 
         print(f">>> Epoch {epoch + 1}/", max_epoch)
-        train_one_epoch(model, inputs, labels, criterion, optimizer, device)
-        print("Evaluating on test set...")
-        accuracy = calculate_accuracy(model, test_data)
-        print(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
+        # Train the model, save accuracy every 100 epochs
+        if epoch % 100 != 99:
+            train_one_epoch(model, inputs, labels, criterion, optimizer, device, False)
+        else:
+            train_accuracy_history.append(
+                train_one_epoch(model, inputs, labels, criterion, optimizer, device, True))
+            print("Evaluating on test set...")
+            accuracy = calculate_accuracy(model, test_data, batch_size = 512)
+            if accuracy > last_accuracy:
+                save_checkpoint(model, optimizer, epoch)
+            last_accuracy = accuracy
+            test_accuracy_history.append(accuracy)
+            save_accuracy_plot(train_accuracy_history, test_accuracy_history)
+            print(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
 
 
-def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, device):
+def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, device, save_plot):
     model.train()
-    total_loss = 0
-    total_samples = input_batch.shape[0]
 
     # Move input and label batches to the same device
     input_batch = input_batch.to(device)
     label_batch = label_batch.to(device)
 
-    # print("input_batch shape:", input_batch.shape)
-    # print("label_batch shape:", label_batch.shape)
-
-    # Forward pass for the entire batch
     optimizer.zero_grad()
-    outputs = model(input_batch)  # Shape: [batch_size, num_classes]
 
-    # Convert (row, col) to single index for the entire batch
-    target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]
+    # Forward pass
+    outputs = model(input_batch)  # Shape: [batch_size, 361]
+    target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]  # Shape: [batch_size]
 
-    # Compute loss for the entire batch
-    loss = criterion(outputs, target_indices)
+    # Compute loss
+    loss = criterion(outputs.view(outputs.size(0), -1), target_indices)
 
     # Backward pass and optimization
     loss.backward()
     optimizer.step()
 
-    total_loss = loss.item()  # Total loss for the batch
-    average_loss = total_loss  # Since we compute loss for the batch directly
+    # Compute training accuracy
+    accuracy = 0
+    if save_plot:
+        _, predicted = torch.max(outputs, 1)  # Predicted indices, Shape: [batch_size]
+        correct_predictions = (predicted == target_indices).sum().item()
+        total_predictions = target_indices.size(0)
+        accuracy = correct_predictions / total_predictions
 
-    print(f"Training Loss: {average_loss:.10f}")
-    return average_loss
+    print(f"Training Loss: {loss.item():.10f}")
+    return accuracy
 
+def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.png"):
+    import matplotlib.pyplot as plt
+
+    plt.figure(figsize=(10, 6))
+    epochs = range(1, len(train_accuracy) + 1)
+
+    plt.plot(epochs, train_accuracy, label="Train Accuracy", marker="o", linestyle="-")
+    plt.plot(epochs, test_accuracy, label="Test Accuracy", marker="o", linestyle="--")
+    plt.title("Train and Test Accuracy Over Epochs")
+    plt.xlabel("Evaluation Step (every 100 epochs)")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.grid()
+    plt.savefig(filename)
+    print(f"Accuracy plot saved as {filename}")
+
+def save_checkpoint(model, optimizer, epoch, checkpoint_path="checkpoint.pth"):
+    state = {
+        "epoch": epoch,
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+    }
+    torch.save(state, checkpoint_path)
+    print(f"Checkpoint saved at epoch {epoch} to {checkpoint_path}")
+
+def load_checkpoint(model, optimizer, checkpoint_path="checkpoint.pth"):
+    if os.path.exists(checkpoint_path):
+        state = torch.load(checkpoint_path)
+        model.load_state_dict(state["model_state"])
+        optimizer.load_state_dict(state["optimizer_state"])
+        start_epoch = state["epoch"] + 1  # Start from the next epoch
+        print(f"Checkpoint loaded from {checkpoint_path}, starting at epoch {start_epoch}")
+        return start_epoch
+    else:
+        print("No checkpoint found, starting from scratch.")
+        return 0
 
 
 
@@ -236,8 +327,18 @@ if __name__ == "__main__":
     print(">>> Main: Loading dataset objects...")
     train_dataset = GoDataset('Dataset/board-move-pairs-train.h5', 'train')
     test_dataset = GoDataset('Dataset/board-move-pairs-test.h5', 'test')
-    train_loader = DeviceDataLoader(train_dataset, batch_size=512, shuffle=True, device=device)
-    test_loader = DeviceDataLoader(test_dataset, batch_size=512, shuffle=False, device=device)
+    train_loader = DeviceDataLoader(train_dataset,
+                                    batch_size=512,
+                                    shuffle=True,
+                                    device=device,
+                                    num_workers=25,
+                                    pin_memory=True)
+    test_loader = DeviceDataLoader(test_dataset,
+                                   batch_size=512,
+                                   shuffle=False,
+                                   device=device,
+                                   num_workers=25,
+                                   pin_memory=True)
 
     # Preload test data into GPU
     print(">>> Preloading test data into GPU...")
@@ -252,15 +353,17 @@ if __name__ == "__main__":
 
     # Preloaded test data
     test_data = (test_inputs, test_labels)
-    print(">>> Test data preloaded.")
+    print("\n>>> Test data preloaded.")
 
     # Initialize model, loss function, and optimizer
     print(">>> Main: Initializing model...")
 
     model = GoNet()
     model.to(device)
+    model.apply(initialize_weights)
     criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.002)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+
 
     # Train the model
     print(">>> Main: Start training...")
