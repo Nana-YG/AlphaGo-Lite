@@ -11,7 +11,6 @@ import torch.nn.init as init
 import matplotlib.pyplot as plt
 import os
 
-last_accuracy = 0
 
 # Define Dataset for HDF5
 class DeviceDataLoader(DataLoader):
@@ -52,7 +51,7 @@ class GoDataset(Dataset):
         if self.type == "train":
             return 106047633
         if self.type == "test":
-            return 2055455
+            return 209083
 
         length = 0
         for group in self.group_names:
@@ -93,6 +92,15 @@ class GoDataset(Dataset):
         # print("Label =\n", label)
         # print("<<<\n")
 
+        ones = np.ones((19, 19), dtype=np.float32)  # One matrix
+        zeros = np.zeros((19, 19), dtype=np.float32)  # Zero matrix
+        board_self = np.where(board > 0, board, 0)
+        board_opponent = np.where(board < 0, board, 0)
+        liberty_self = np.where(liberty > 0, liberty, 0)
+        liberty_opponent = np.where(liberty > 0, liberty, 0)
+        empty_matrix = np.where(board == 0, 1, 0)
+
+
         # Check dimension
         if board.shape != (19, 19):
             raise ValueError(f"Invalid board shape: {board.shape}")
@@ -100,7 +108,18 @@ class GoDataset(Dataset):
             raise ValueError(f"Invalid liberty shape: {liberty.shape}")
 
         # Combine board and liberty into a single NumPy array and then convert to Tensor
-        combined_array = np.stack([board, liberty], axis=0)  # Shape: (2, 19, 19)
+        combined_array = np.stack(
+            [board,
+             liberty,
+             ones,
+             ones,
+             zeros,
+             board_self,
+             board_opponent,
+             liberty_self,
+             liberty_opponent,
+             empty_matrix],
+             axis=0)  # Shape: (10, 19, 19)
         input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
@@ -117,33 +136,27 @@ class GoNet(nn.Module):
         super(GoNet, self).__init__()
 
         # 第一层卷积：输入通道 48，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
-        self.conv1 = nn.Conv2d(in_channels=2, out_channels=192, kernel_size=5, stride=1, padding=2)
-
+        self.conv1 = nn.Conv2d(in_channels=10, out_channels=192, kernel_size=5, stride=1, padding=2)
         # 后续 11 层卷积：输入通道 192，输出通道 192，卷积核大小 3x3，步幅 1，填充 1（保持尺寸）
         self.hidden_convs = nn.Sequential(
             *[nn.Conv2d(in_channels=192, out_channels=192, kernel_size=3, stride=1, padding=1) for _ in range(11)]
         )
-
         # 输出层：1x1 卷积，输入通道 192，输出通道 1（对应棋盘每个位置的概率）
         self.output_conv = nn.Conv2d(in_channels=192, out_channels=1, kernel_size=1, stride=1, padding=0)
-
         # 激活函数
         self.relu = nn.ReLU()
-
         # Softmax 层：在 2D 平面上按每个位置归一化概率
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
+
         # 第一层卷积 + ReLU
         x = self.relu(self.conv1(x))
-
         # 11 层隐藏卷积 + ReLU
         for conv in self.hidden_convs:
             x = self.relu(conv(x))
-
         # 最后一层卷积
         x = self.output_conv(x)
-
         # 输出概率分布（flatten 为 [batch_size, 361]，然后应用 softmax）
         x = x.view(x.size(0), -1)  # Flatten to [batch_size, 361]
         x = self.softmax(x)  # Apply softmax to get probabilities
@@ -197,6 +210,9 @@ def calculate_accuracy(model, test_data, batch_size):
 # Training function
 def train(model, train_loader, test_data, criterion, optimizer, max_epoch, device):
 
+    global last_accuracy
+    last_accuracy = 0.0
+
     # data iterator - manually load data
     data_iter = iter(train_loader)
 
@@ -209,19 +225,16 @@ def train(model, train_loader, test_data, criterion, optimizer, max_epoch, devic
 
     for epoch in range(max_epoch):
 
-        # Scheduler step
-        scheduler.step()
-
         # Get one batch
         inputs, labels = next(data_iter)
 
         print(f">>> Epoch {epoch + 1}/", max_epoch)
         # Train the model, save accuracy every 100 epochs
         if epoch % 100 != 99:
-            train_one_epoch(model, inputs, labels, criterion, optimizer, device, False)
+            train_one_epoch(model, inputs, labels, criterion, optimizer, scheduler, device, False)
         else:
             train_accuracy_history.append(
-                train_one_epoch(model, inputs, labels, criterion, optimizer, device, True))
+                train_one_epoch(model, inputs, labels, criterion, optimizer, scheduler, device, True))
             print("Evaluating on test set...")
             accuracy = calculate_accuracy(model, test_data, batch_size = 512)
             if accuracy > last_accuracy:
@@ -232,7 +245,7 @@ def train(model, train_loader, test_data, criterion, optimizer, max_epoch, devic
             print(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
 
 
-def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, device, save_plot):
+def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, scheduler, device, save_plot):
     model.train()
 
     # Move input and label batches to the same device
@@ -251,6 +264,7 @@ def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, devic
     # Backward pass and optimization
     loss.backward()
     optimizer.step()
+    scheduler.step()
 
     # Compute training accuracy
     accuracy = 0

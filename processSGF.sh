@@ -45,9 +45,16 @@ clean_hdf5() {
 
 # Function to merge all HDF5 files
 merge_hdf5() {
-    echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
-    "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1 "$MERGE_DIR"-$1.h5
-    echo "All HDF5 files have been merged."
+
+    if [ "$1" = "test" ]; then
+        echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
+        "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1/0001 "$MERGE_DIR"-$1.h5
+        echo "All HDF5 files have been merged."
+    else
+        echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
+        "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1 "$MERGE_DIR"-$1.h5
+        echo "All HDF5 files have been merged."
+    fi
 }
 
 # Main script logic
