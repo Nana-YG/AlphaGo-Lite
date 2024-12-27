@@ -48,8 +48,8 @@ class GoDataset(Dataset):
     def __len__(self):
         print("Calculating length of dataset...")
 
-        if self.type == "train":
-            return 106047633
+        # if self.type == "train":
+        #     return 106047633
         if self.type == "test":
             return 209083
 
@@ -112,14 +112,8 @@ class GoDataset(Dataset):
             [board,
              liberty,
              ones,
-             ones,
-             zeros,
-             board_self,
-             board_opponent,
-             liberty_self,
-             liberty_opponent,
-             empty_matrix],
-             axis=0)  # Shape: (10, 19, 19)
+             zeros],
+             axis=0)  # Shape: (4, 19, 19)
         input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
@@ -136,7 +130,7 @@ class GoNet(nn.Module):
         super(GoNet, self).__init__()
 
         # 第一层卷积：输入通道 48，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
-        self.conv1 = nn.Conv2d(in_channels=10, out_channels=192, kernel_size=5, stride=1, padding=2)
+        self.conv1 = nn.Conv2d(in_channels=4, out_channels=192, kernel_size=5, stride=1, padding=2)
         # 后续 11 层卷积：输入通道 192，输出通道 192，卷积核大小 3x3，步幅 1，填充 1（保持尺寸）
         self.hidden_convs = nn.Sequential(
             *[nn.Conv2d(in_channels=192, out_channels=192, kernel_size=3, stride=1, padding=1) for _ in range(11)]
@@ -162,7 +156,8 @@ class GoNet(nn.Module):
         x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
-def initialize_weights(model):
+def initialize_weights(model, seed=42):  # 默认 seed 为 42
+    torch.manual_seed(seed)  # 设置全局随机种子
     if isinstance(model, nn.Conv2d):
         init.xavier_uniform_(model.weight)  # Xavier 初始化
         if model.bias is not None:
@@ -217,7 +212,7 @@ def train(model, train_loader, test_data, criterion, optimizer, max_epoch, devic
     data_iter = iter(train_loader)
 
     # learning rate curve
-    scheduler = StepLR(optimizer, step_size=1000, gamma=0.98)
+    scheduler = StepLR(optimizer, step_size=2000, gamma=0.98)
 
     # Save accuracies
     train_accuracy_history = []
@@ -278,13 +273,12 @@ def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, sched
     return accuracy
 
 def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.png"):
-    import matplotlib.pyplot as plt
 
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_accuracy) + 1)
 
-    plt.plot(epochs, train_accuracy, label="Train Accuracy", marker="o", linestyle="-")
-    plt.plot(epochs, test_accuracy, label="Test Accuracy", marker="o", linestyle="--")
+    plt.plot(epochs, train_accuracy, label="Train Accuracy", linestyle="-")
+    plt.plot(epochs, test_accuracy, label="Test Accuracy", linestyle="-")
     plt.title("Train and Test Accuracy Over Epochs")
     plt.xlabel("Evaluation Step (every 100 epochs)")
     plt.ylabel("Accuracy")
@@ -376,12 +370,12 @@ if __name__ == "__main__":
     model.to(device)
     model.apply(initialize_weights)
     criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.02, weight_decay=1e-4)
 
 
     # Train the model
     print(">>> Main: Start training...")
-    train(model, train_loader, test_data, criterion, optimizer, max_epoch = 200000, device = device)
+    train(model, train_loader, test_data, criterion, optimizer, max_epoch = 400000, device = device)
 
     # Save the model
     print(">>> Main: Training finished. Saving model...")

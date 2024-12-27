@@ -6,7 +6,7 @@
 # Directories
 INPUT_BASE_DIR="./Dataset/sgf"    # Input SGF root directory
 OUTPUT_BASE_DIR="./Dataset/h5"    # Output HDF5 root directory
-MERGE_DIR="./Dataset/board-move-pairs" # Merged HDF5 directory
+MERGE_DIR="./Dataset" # Merged HDF5 directory
 GTP_CORE_EXEC="./cpp/GTP-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
 
 # Ensure GTP-Core exists
@@ -45,16 +45,19 @@ clean_hdf5() {
 
 # Function to merge all HDF5 files
 merge_hdf5() {
+    local dataset_type=$1
 
-    if [ "$1" = "test" ]; then
-        echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
-        "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1/0001 "$MERGE_DIR"-$1.h5
-        echo "All HDF5 files have been merged."
-    else
-        echo "Merging all HDF5 files in $OUTPUT_BASE_DIR..."
-        "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1 "$MERGE_DIR"-$1.h5
-        echo "All HDF5 files have been merged."
-    fi
+    echo "Merging HDF5 files for each subdirectory in $OUTPUT_BASE_DIR/$dataset_type..."
+    for folder in "$OUTPUT_BASE_DIR/$dataset_type"/*; do
+        if [[ -d "$folder" ]]; then
+            folder_name=$(basename "$folder")
+            output_file="$MERGE_DIR/${dataset_type}_${folder_name}.h5"
+
+            echo "Merging files in $folder into $output_file..."
+            "$GTP_CORE_EXEC" Merge "$folder" "$output_file"
+        fi
+    done
+    echo "HDF5 merge completed for $dataset_type."
 }
 
 # Main script logic
