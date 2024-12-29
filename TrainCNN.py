@@ -1,5 +1,5 @@
+import gc
 import os
-import numpy as np
 import h5py
 import torch
 import torch.nn as nn
@@ -9,6 +9,7 @@ import bisect
 from torch.optim.lr_scheduler import StepLR
 import torch.nn.init as init
 import matplotlib.pyplot as plt
+import numpy as np
 import random
 
 from Utils import (
@@ -151,14 +152,22 @@ class GoNet(nn.Module):
 
 def initialize_weights(model, seed=42):
     torch.manual_seed(seed)
-    if isinstance(model, nn.Conv2d):
-        init.xavier_uniform_(model.weight)
-        if model.bias is not None:
-            init.zeros_(model.bias)
-    elif isinstance(model, nn.Linear):
-        init.kaiming_uniform_(model.weight, nonlinearity='relu')
-        if model.bias is not None:
-            init.zeros_(model.bias)
+    for layer in model.modules():
+        if isinstance(layer, nn.Conv2d):
+            # Kaiming初始化适合ReLU激活函数
+            init.kaiming_uniform_(layer.weight, mode='fan_out', nonlinearity='relu')
+            if layer.bias is not None:
+                init.zeros_(layer.bias)
+        elif isinstance(layer, nn.Linear):
+            # Xavier初始化适合Sigmoid/Tanh等
+            init.xavier_uniform_(layer.weight)
+            if layer.bias is not None:
+                init.zeros_(layer.bias)
+        elif isinstance(layer, nn.BatchNorm2d):
+            # 批归一化层权重为1，偏置为0
+            init.ones_(layer.weight)
+            init.zeros_(layer.bias)
+
 
 def calculate_accuracy(model, test_data, batch_size):
     model.eval()
@@ -198,15 +207,14 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
 
     for epoch in range(max_epoch):
         for h5_file in h5_files:
-            # 将多参数合并为单字符串
             print_blue(">>> Train: Loading from file: " + str(h5_file))
             train_file_path = "Dataset/" + h5_file
             train_dataset = GoDataset(train_file_path, 'train')
             train_loader = DeviceDataLoader(train_dataset,
-                                            batch_size=512,
+                                            batch_size=128,
                                             shuffle=True,
                                             device=device,
-                                            num_workers=25,
+                                            num_workers=12,
                                             pin_memory=True)
 
             print_blue(">>> Train: Data loaded, training on " + str(device) + "...")
@@ -216,15 +224,19 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
 
             print_blue(">>> Train: Evaluating on test set...")
             accuracy = calculate_accuracy(model, test_data, batch_size=512)
+            print_green(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
             if accuracy > last_accuracy:
                 save_checkpoint(model, optimizer, epoch)
             last_accuracy = accuracy
 
             test_accuracy_history.append(accuracy)
             save_accuracy_plot(train_accuracy_history, test_accuracy_history)
-            print_blue(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
+            print_blue(">>> Train: Deleting dataset...")
+            del train_dataset
+            del train_loader
+            gc.collect()
 
-        print_blue(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
+        print_green(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
         scheduler.step()
 
 
@@ -253,7 +265,7 @@ def train_one_file(model, train_loader, criterion, optimizer, device):
 
     avg_loss = total_loss / (batch_idx + 1)
     avg_acc = total_correct / total_samples if total_samples > 0 else 0
-    print_blue("Average loss: {:.10f}".format(avg_loss))
+    print_green("Average loss: {:.10f}".format(avg_loss))
     return avg_acc
 
 
@@ -313,7 +325,7 @@ if __name__ == "__main__":
                                    batch_size=512,
                                    shuffle=False,
                                    device=device,
-                                   num_workers=25,
+                                   num_workers=24,
                                    pin_memory=True)
 
     print_blue("\n>>> Preloading test data into GPU...")
@@ -334,7 +346,7 @@ if __name__ == "__main__":
     model.apply(initialize_weights)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.02, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
 
     print_blue(">>> Main: Start training...")
     max_epoch = 100
