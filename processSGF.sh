@@ -4,8 +4,8 @@
 # For 'test', 'train', and 'val' datasets
 
 # Directories
-INPUT_BASE_DIR="./Dataset/sgf"    # Input SGF root directory
-OUTPUT_BASE_DIR="./Dataset/h5"    # Output HDF5 root directory
+INPUT_BASE_DIR="./fawData/sgf"    # Input SGF root directory
+OUTPUT_BASE_DIR="./rawData/h5"    # Output HDF5 root directory
 MERGE_DIR="./Dataset" # Merged HDF5 directory
 GTP_CORE_EXEC="./cpp/GTP-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
 
@@ -76,9 +76,10 @@ case "$1" in
         echo "Starting HDF5 merge..."
         if [ $# -lt 2 ]; then
             echo "Usage: ./processSGF merge [train/test/val]"
+        else
+            merge_hdf5 $2
+            echo "HDF5 merge completed successfully."
         fi
-        merge_hdf5 $2
-        echo "HDF5 merge completed successfully."
         ;;
     *)
         echo "Usage: $0 {process|clean}"

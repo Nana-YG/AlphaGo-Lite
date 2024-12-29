@@ -9,8 +9,13 @@ import bisect
 from torch.optim.lr_scheduler import StepLR
 import torch.nn.init as init
 import matplotlib.pyplot as plt
-import os
+import random
 
+from Utils import (
+    print_blue,
+    print_green,
+    print_red
+)
 
 # Define Dataset for HDF5
 class DeviceDataLoader(DataLoader):
@@ -30,7 +35,7 @@ class GoDataset(Dataset):
         self.group_names = list(self.h5_file.keys())
 
         # Load start indices for each group
-        print("Reading startingIndex from file...")
+        print(">>> Reading startingIndex from file...")
         self.start_indices = {}
         for group_name in self.group_names:
             group = self.h5_file[group_name]
@@ -45,26 +50,35 @@ class GoDataset(Dataset):
             self.group_names, key=lambda name: self.start_indices[name]
         )
 
-    def __len__(self):
-        print("Calculating length of dataset...")
+        # Preload data into memory if specified
+        self.cache = {}
+        print("Preloading data into memory... File name =", h5_file)
+        idx = 0
+        for group_name in self.group_names:
+            if idx % 100 == 0:
+                print('#', end='', flush=True)
+            group = self.h5_file[group_name]
+            self.cache[group_name] = {
+                "boards": {key: group[key][:] for key in group if key.startswith("board")},
+                "liberties": {key: group[key][:] for key in group if key.startswith("liberty")},
+                "labels": {key: group[key][:] for key in group if key.startswith("nextMove")},
+            }
+            idx += 1
 
-        # if self.type == "train":
-        #     return 106047633
+    def __len__(self):
+        print("\nCalculating length of dataset...")
         if self.type == "test":
             return 209083
 
         length = 0
         for group in self.group_names:
             group_keys = self.h5_file[group].keys()  # get all keys from current group
-            # print("Group keys:", group_keys)
             length += len(group_keys)
 
-        print ("Length =", length // 3)
+        print("Length =", length // 3)
         return length
 
-
     def __getitem__(self, idx):
-
         # Use binary search to find the correct group
         start_values = [self.start_indices[name] for name in self.group_names]
         group_idx = bisect.bisect_right(start_values, idx) - 1
@@ -72,56 +86,36 @@ class GoDataset(Dataset):
 
         # Calculate the local index within the group
         local_idx = idx - self.start_indices[group_name]
-        # if self.type == "train":
-        #     print(">>> Loaded: Index =", idx, "Group =", group_name, "Local =", local_idx)
 
         try:
-            group = self.h5_file[group_name]
-            board = group[f"board_{local_idx}"][:]
-            liberty = group[f"liberty_{local_idx}"][:]
-            label = group[f"nextMove_{local_idx}"][:]
+            board = self.cache[group_name]["boards"][f"board_{local_idx}"]
+            liberty = self.cache[group_name]["liberties"][f"liberty_{local_idx}"]
+            label = self.cache[group_name]["labels"][f"nextMove_{local_idx}"]
         except Exception as e:
-            # print(f"Error loading data at idx {idx}, group {group_name}, local_idx {local_idx}: {e}")
             # Use default values in case of error
-            board = np.zeros((19, 19), dtype=np.float32)  # Default board filled with zeros
-            liberty = np.zeros((19, 19), dtype=np.float32)  # Default liberty filled with zeros
-            label = np.array([3, 3], dtype=np.int64)  # Default label at position (3, 3)
+            board = np.zeros((19, 19), dtype=np.float32)
+            liberty = np.zeros((19, 19), dtype=np.float32)
+            label = np.array([3, 3], dtype=np.int64)
 
-        # print("Board =\n", board)
-        # print("Liberty =\n", liberty)
-        # print("Label =\n", label)
-        # print("<<<\n")
-
-        ones = np.ones((19, 19), dtype=np.float32)  # One matrix
-        zeros = np.zeros((19, 19), dtype=np.float32)  # Zero matrix
-        board_self = np.where(board > 0, board, 0)
-        board_opponent = np.where(board < 0, board, 0)
-        liberty_self = np.where(liberty > 0, liberty, 0)
-        liberty_opponent = np.where(liberty > 0, liberty, 0)
-        empty_matrix = np.where(board == 0, 1, 0)
-
-
-        # Check dimension
         if board.shape != (19, 19):
             raise ValueError(f"Invalid board shape: {board.shape}")
         if liberty.shape != (19, 19):
             raise ValueError(f"Invalid liberty shape: {liberty.shape}")
 
         # Combine board and liberty into a single NumPy array and then convert to Tensor
+        ones = np.ones((19, 19), dtype=np.float32)
+        zeros = np.zeros((19, 19), dtype=np.float32)
+
         combined_array = np.stack(
             [board,
              liberty,
              ones,
              zeros],
-             axis=0)  # Shape: (4, 19, 19)
+            axis=0)  # Shape: (4, 19, 19)
         input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
-        if idx % 40000 == 0 and self.type == "test":
-            print('#', end='', flush=True)
-
         return input_tensor, label_tensor
-
 
 
 # Define the neural network
@@ -129,7 +123,7 @@ class GoNet(nn.Module):
     def __init__(self):
         super(GoNet, self).__init__()
 
-        # 第一层卷积：输入通道 48，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
+        # 第一层卷积：输入通道 4，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
         self.conv1 = nn.Conv2d(in_channels=4, out_channels=192, kernel_size=5, stride=1, padding=2)
         # 后续 11 层卷积：输入通道 192，输出通道 192，卷积核大小 3x3，步幅 1，填充 1（保持尺寸）
         self.hidden_convs = nn.Sequential(
@@ -143,7 +137,6 @@ class GoNet(nn.Module):
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
-
         # 第一层卷积 + ReLU
         x = self.relu(self.conv1(x))
         # 11 层隐藏卷积 + ReLU
@@ -156,14 +149,14 @@ class GoNet(nn.Module):
         x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
-def initialize_weights(model, seed=42):  # 默认 seed 为 42
-    torch.manual_seed(seed)  # 设置全局随机种子
+def initialize_weights(model, seed=42):
+    torch.manual_seed(seed)
     if isinstance(model, nn.Conv2d):
-        init.xavier_uniform_(model.weight)  # Xavier 初始化
+        init.xavier_uniform_(model.weight)
         if model.bias is not None:
-            init.zeros_(model.bias)  # 偏置初始化为零
+            init.zeros_(model.bias)
     elif isinstance(model, nn.Linear):
-        init.kaiming_uniform_(model.weight, nonlinearity='relu')  # He 初始化
+        init.kaiming_uniform_(model.weight, nonlinearity='relu')
         if model.bias is not None:
             init.zeros_(model.bias)
 
@@ -172,108 +165,99 @@ def calculate_accuracy(model, test_data, batch_size):
     correct = 0
     total = 0
 
-    # Unpack test data
     inputs, labels = test_data
-
     with torch.no_grad():
-        # Process data in batches
         for start_idx in range(0, inputs.size(0), batch_size):
             end_idx = min(start_idx + batch_size, inputs.size(0))
             input_batch = inputs[start_idx:end_idx]
             label_batch = labels[start_idx:end_idx]
 
-            # Forward pass
             outputs = model(input_batch)
             _, predicted = torch.max(outputs, 1)
             target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]
 
-            # Accumulate correct predictions
-            # print("predicted shape:", predicted.shape)
-            # print("predicted =", predicted)
-            # print("target indices shape", target_indices.shape)
-            # print("target indices =", target_indices)
             correct += (predicted == target_indices).sum().item()
             total += label_batch.size(0)
 
-    # Compute accuracy
     accuracy = correct / total
     return accuracy
 
 
-
-
 # Training function
-def train(model, train_loader, test_data, criterion, optimizer, max_epoch, device):
-
+def train(model, test_data, criterion, optimizer, max_epoch, device):
     global last_accuracy
     last_accuracy = 0.0
 
-    # data iterator - manually load data
-    data_iter = iter(train_loader)
+    folder_path = "Dataset/"
+    h5_files = [f for f in os.listdir(folder_path) if f.endswith('.h5')]
 
-    # learning rate curve
-    scheduler = StepLR(optimizer, step_size=2000, gamma=0.98)
+    scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
 
-    # Save accuracies
     train_accuracy_history = []
     test_accuracy_history = []
 
     for epoch in range(max_epoch):
+        for h5_file in h5_files:
+            # 将多参数合并为单字符串
+            print_blue(">>> Train: Loading from file: " + str(h5_file))
+            train_file_path = "Dataset/" + h5_file
+            train_dataset = GoDataset(train_file_path, 'train')
+            train_loader = DeviceDataLoader(train_dataset,
+                                            batch_size=512,
+                                            shuffle=True,
+                                            device=device,
+                                            num_workers=25,
+                                            pin_memory=True)
 
-        # Get one batch
-        inputs, labels = next(data_iter)
-
-        print(f">>> Epoch {epoch + 1}/", max_epoch)
-        # Train the model, save accuracy every 100 epochs
-        if epoch % 100 != 99:
-            train_one_epoch(model, inputs, labels, criterion, optimizer, scheduler, device, False)
-        else:
+            print_blue(">>> Train: Data loaded, training on " + str(device) + "...")
             train_accuracy_history.append(
-                train_one_epoch(model, inputs, labels, criterion, optimizer, scheduler, device, True))
-            print("Evaluating on test set...")
-            accuracy = calculate_accuracy(model, test_data, batch_size = 512)
+                train_one_file(model, train_loader, criterion, optimizer, device)
+            )
+
+            print_blue(">>> Train: Evaluating on test set...")
+            accuracy = calculate_accuracy(model, test_data, batch_size=512)
             if accuracy > last_accuracy:
                 save_checkpoint(model, optimizer, epoch)
             last_accuracy = accuracy
+
             test_accuracy_history.append(accuracy)
             save_accuracy_plot(train_accuracy_history, test_accuracy_history)
-            print(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
+            print_blue(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
+
+        print_blue(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
+        scheduler.step()
 
 
-def train_one_epoch(model, input_batch, label_batch, criterion, optimizer, scheduler, device, save_plot):
+def train_one_file(model, train_loader, criterion, optimizer, device):
     model.train()
+    total_loss = 0.0
+    total_correct = 0
+    total_samples = 0
 
-    # Move input and label batches to the same device
-    input_batch = input_batch.to(device)
-    label_batch = label_batch.to(device)
+    for batch_idx, (inputs, labels) in enumerate(train_loader):
+        outputs = model(inputs)
+        target_indices = labels[:, 0] * 19 + labels[:, 1]
+        loss = criterion(outputs, target_indices)
 
-    optimizer.zero_grad()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-    # Forward pass
-    outputs = model(input_batch)  # Shape: [batch_size, 361]
-    target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]  # Shape: [batch_size]
+        total_loss += loss.item()
+        _, predicted = torch.max(outputs, dim=1)
+        total_correct += (predicted == target_indices).sum().item()
+        total_samples += labels.size(0)
 
-    # Compute loss
-    loss = criterion(outputs.view(outputs.size(0), -1), target_indices)
+        if batch_idx % 200 == 0:
+            print("\033[94m#\033[00m", end='', flush=True)
 
-    # Backward pass and optimization
-    loss.backward()
-    optimizer.step()
-    scheduler.step()
+    avg_loss = total_loss / (batch_idx + 1)
+    avg_acc = total_correct / total_samples if total_samples > 0 else 0
+    print_blue("Average loss: {:.10f}".format(avg_loss))
+    return avg_acc
 
-    # Compute training accuracy
-    accuracy = 0
-    if save_plot:
-        _, predicted = torch.max(outputs, 1)  # Predicted indices, Shape: [batch_size]
-        correct_predictions = (predicted == target_indices).sum().item()
-        total_predictions = target_indices.size(0)
-        accuracy = correct_predictions / total_predictions
-
-    print(f"Training Loss: {loss.item():.10f}")
-    return accuracy
 
 def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.png"):
-
     plt.figure(figsize=(10, 6))
     epochs = range(1, len(train_accuracy) + 1)
 
@@ -301,7 +285,7 @@ def load_checkpoint(model, optimizer, checkpoint_path="checkpoint.pth"):
         state = torch.load(checkpoint_path)
         model.load_state_dict(state["model_state"])
         optimizer.load_state_dict(state["optimizer_state"])
-        start_epoch = state["epoch"] + 1  # Start from the next epoch
+        start_epoch = state["epoch"] + 1
         print(f"Checkpoint loaded from {checkpoint_path}, starting at epoch {start_epoch}")
         return start_epoch
     else:
@@ -309,9 +293,7 @@ def load_checkpoint(model, optimizer, checkpoint_path="checkpoint.pth"):
         return 0
 
 
-
 if __name__ == "__main__":
-
     # Detect device availability
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -319,28 +301,14 @@ if __name__ == "__main__":
         device = torch.device("mps")
     else:
         device = torch.device("cpu")
-        print("GPU not available. Using CPU instead.")
-    print(f"Using device: {device}\n")
+        print_red("GPU not available. Using CPU instead.")
 
-    # Examine the file exist
-    print("File exist =", os.path.exists('Dataset/board-move-pairs-train.h5'))
+    print_blue(f">>> Using device: {device}")
 
-    # # Check h5 file structure
-    # with h5py.File('Dataset/board-move-pairs-training.h5', 'r') as f:
-    #     def print_structure(name, obj):
-    #         print(name, "->", obj)
-    #     f.visititems(print_structure)
+    print_green(">>> File exist = " + str(os.path.exists('Dataset/board-move-pairs-train.h5')))
 
-    # Load data with mini-batch size
-    print(">>> Main: Loading dataset objects...")
-    train_dataset = GoDataset('Dataset/board-move-pairs-train.h5', 'train')
-    test_dataset = GoDataset('Dataset/board-move-pairs-test.h5', 'test')
-    train_loader = DeviceDataLoader(train_dataset,
-                                    batch_size=512,
-                                    shuffle=True,
-                                    device=device,
-                                    num_workers=25,
-                                    pin_memory=True)
+    print_blue(">>> Main: Loading dataset objects...")
+    test_dataset = GoDataset('Dataset/test_0000.h5', 'test')
     test_loader = DeviceDataLoader(test_dataset,
                                    batch_size=512,
                                    shuffle=False,
@@ -348,36 +316,30 @@ if __name__ == "__main__":
                                    num_workers=25,
                                    pin_memory=True)
 
-    # Preload test data into GPU
-    print(">>> Preloading test data into GPU...")
+    print_blue("\n>>> Preloading test data into GPU...")
     test_inputs, test_labels = [], []
     for inputs, labels in test_loader:
         test_inputs.append(inputs.to(device))
         test_labels.append(labels.to(device))
 
-    # Concatenate all test inputs and labels
     test_inputs = torch.cat(test_inputs, dim=0)
     test_labels = torch.cat(test_labels, dim=0)
 
-    # Preloaded test data
     test_data = (test_inputs, test_labels)
-    print("\n>>> Test data preloaded.")
+    print_blue("\n>>> Test data preloaded.")
 
-    # Initialize model, loss function, and optimizer
-    print(">>> Main: Initializing model...")
-
+    print_blue(">>> Main: Initializing model...")
     model = GoNet()
     model.to(device)
     model.apply(initialize_weights)
-    criterion = nn.CrossEntropyLoss()  # For classification of 361 positions
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.02, weight_decay=1e-4)
 
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.02, weight_decay=1e-4)
 
-    # Train the model
-    print(">>> Main: Start training...")
-    train(model, train_loader, test_data, criterion, optimizer, max_epoch = 400000, device = device)
+    print_blue(">>> Main: Start training...")
+    max_epoch = 100
+    train(model, test_data, criterion, optimizer, max_epoch, device=device)
 
-    # Save the model
-    print(">>> Main: Training finished. Saving model...")
+    print_blue(">>> Main: Training finished. Saving model...")
     torch.save(model.state_dict(), 'go_model.pth')
-    print(">>> Main: Model saved.")
+    print_blue(">>> Main: Model saved.")
