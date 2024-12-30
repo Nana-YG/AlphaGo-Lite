@@ -195,17 +195,16 @@ def calculate_accuracy(model, test_data, batch_size):
 
 
 # Training function
-def train(model, test_data, criterion, optimizer, max_epoch, device):
+def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, device, plot_loss):
     global last_accuracy
     last_accuracy = 0.0
 
-    folder_path = "Dataset/"
+    folder_path = "Dataset/train/"
     h5_files = [f for f in os.listdir(folder_path) if f.endswith('.h5')]
-
-    scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
 
     train_accuracy_history = []
     test_accuracy_history = []
+    loss_history = []
 
     accuracy = calculate_accuracy(model, test_data, batch_size=512)
     print_green(f"Initial accuracy: {accuracy:.10f}")
@@ -216,48 +215,52 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
 
     file_count = 0
 
-    for epoch in range(max_epoch):
-        for h5_file in h5_files:
-            print_blue(">>> Train: Loading from file: " + str(h5_file))
-            train_file_path = "Dataset/" + h5_file
-            train_dataset = GoDataset(train_file_path, 'train')
-            train_loader = DeviceDataLoader(train_dataset,
-                                            batch_size=128,
-                                            shuffle=True,
-                                            device=device,
-                                            num_workers=6,
-                                            pin_memory=True)
 
-            print_blue(">>> Train: Data loaded, training on " + str(device) + "...")
-            train_accuracy_history.append(
-                train_one_file(model, train_loader, criterion, optimizer, device)
-            )
+    for h5_file in h5_files:
+        print_blue(">>> Train: Loading from file: " + str(h5_file))
+        train_file_path = "Dataset/train/" + h5_file
+        train_dataset = GoDataset(train_file_path, 'train')
+        train_loader = DeviceDataLoader(train_dataset,
+                                        batch_size=128,
+                                        shuffle=True,
+                                        device=device,
+                                        num_workers=6,
+                                        pin_memory=True)
 
-            print_blue(">>> Train: Evaluating on test set...")
-            accuracy = calculate_accuracy(model, test_data, batch_size=512)
-            print_green(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
-            if accuracy > last_accuracy:
-                save_checkpoint(model, optimizer, epoch)
-            last_accuracy = accuracy
+        print_blue(">>> Train: Data loaded, training on " + str(device) + "...")
+        file_accuracy, file_losses = train_one_file(model, train_loader, criterion, optimizer)
+        train_accuracy_history.append(file_accuracy)
+        if plot_loss:
+            loss_history.extend(file_losses)
+            save_loss_plot(loss_history)
 
-            test_accuracy_history.append(accuracy)
-            save_accuracy_plot(train_accuracy_history, test_accuracy_history)
-            print_blue(">>> Train: Deleting dataset...")
-            del train_dataset
-            del train_loader
-            gc.collect()
-            file_count += 1
-            if file_count % 10 == 0:
-                scheduler.step()
+        print_blue(">>> Train: Evaluating on test set...")
+        accuracy = calculate_accuracy(model, test_data, batch_size=512)
+        print_green(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
+        if accuracy > last_accuracy:
+            save_checkpoint(model, optimizer, epoch)
+        last_accuracy = accuracy
 
-        print_green(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
+        test_accuracy_history.append(accuracy)
+        save_accuracy_plot(train_accuracy_history, test_accuracy_history)
+        print_blue(">>> Train: Deleting dataset...")
+        del train_dataset
+        del train_loader
+        gc.collect()
+        file_count += 1
+        scheduler.step()
+
+    print_green(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
 
 
-def train_one_file(model, train_loader, criterion, optimizer, device):
+def train_one_file(model, train_loader, criterion, optimizer):
     model.train()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+
+    interval_loss = 0.0
+    interval_losses = []
 
     for batch_idx, (inputs, labels) in enumerate(train_loader):
         outputs = model(inputs)
@@ -269,22 +272,39 @@ def train_one_file(model, train_loader, criterion, optimizer, device):
         optimizer.step()
 
         total_loss += loss.item()
+        interval_loss += loss.item()
         _, predicted = torch.max(outputs, dim=1)
         total_correct += (predicted == target_indices).sum().item()
         total_samples += labels.size(0)
 
-        if batch_idx % 1000 == 0:
+        if batch_idx % 1000 == 999:
+            interval_loss = interval_loss / 1000
+            interval_losses.append(interval_loss)
+            interval_loss = 0.0
             print("\033[94m#\033[00m", end='', flush=True)
 
     avg_loss = total_loss / (batch_idx + 1)
     avg_acc = total_correct / total_samples if total_samples > 0 else 0
     print_green("Average loss: {:.10f}".format(avg_loss))
-    return avg_acc
+    return avg_acc, interval_losses
+
+def save_loss_plot(loss_history):
+    if len(loss_history) > 0:
+        plt.figure(figsize=(10, 6))
+        indices = range(1, len(loss_history) + 1)
+        plt.plot(indices, loss_history, label='Interval Avg Loss')
+        plt.xlabel('Batch Index')
+        plt.ylabel('Loss')
+        plt.title('Average Loss per 1000 Batches')
+        plt.legend()
+        plt.grid()
+        plt.savefig('interval_losses.png')
+        plt.close()
 
 
 def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.png"):
     plt.figure(figsize=(10, 6))
-    epochs = range(1, len(train_accuracy) + 1)
+    epochs = range(0, len(train_accuracy))
 
     plt.plot(epochs, train_accuracy, label="Train Accuracy", linestyle="-")
     plt.plot(epochs, test_accuracy, label="Test Accuracy", linestyle="-")
@@ -376,7 +396,7 @@ if __name__ == "__main__":
     print_blue(f">>> Using device: {device}")
 
     print_blue(">>> Main: Loading dataset objects...")
-    test_dataset = GoDataset('Dataset/test_0000.h5', 'test')
+    test_dataset = GoDataset('Dataset/test/test_small.h5', 'test')
     test_loader = DeviceDataLoader(test_dataset,
                                    batch_size=512,
                                    shuffle=False,
@@ -402,11 +422,22 @@ if __name__ == "__main__":
     model.apply(initialize_weights)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.00001, weight_decay=1e-5)
 
     print_blue(">>> Main: Start training...")
-    max_epoch = 30
-    train(model, test_data, criterion, optimizer, max_epoch, device=device)
+    max_epoch = 10
+    optimizers = []
+    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=1e-5))
+    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.000002, momentum=0.9, weight_decay=1e-4))
+
+    schedulers = []
+    schedulers.append(StepLR(optimizers[0], step_size=2, gamma=0.90))
+    schedulers.append(StepLR(optimizers[1], step_size=1, gamma=0.98))
+
+    for epoch in range(max_epoch):
+        if epoch == 0:
+            train_one_epoch(model, test_data, criterion, optimizers[0], schedulers[0], epoch, device=device, plot_loss=True)
+        else:
+            train_one_epoch(model, test_data, criterion, optimizers[1], schedulers[1], epoch, device=device, plot_loss=False)
 
     print_blue(">>> Main: Training finished. Saving model...")
     torch.save(model.state_dict(), 'go_model.pth')
