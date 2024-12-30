@@ -46,18 +46,25 @@ clean_hdf5() {
 # Function to merge all HDF5 files
 merge_hdf5() {
     local dataset_type=$1
+    if [ $1 == "train" ]; then
+        echo "Merging HDF5 files for each subdirectory in $OUTPUT_BASE_DIR/$dataset_type..."
+        for folder in "$OUTPUT_BASE_DIR/$dataset_type"/*; do
+            if [[ -d "$folder" ]]; then
+                folder_name=$(basename "$folder")
+                output_file="$MERGE_DIR/${dataset_type}_${folder_name}.h5"
 
-    echo "Merging HDF5 files for each subdirectory in $OUTPUT_BASE_DIR/$dataset_type..."
-    for folder in "$OUTPUT_BASE_DIR/$dataset_type"/*; do
-        if [[ -d "$folder" ]]; then
-            folder_name=$(basename "$folder")
-            output_file="$MERGE_DIR/${dataset_type}_${folder_name}.h5"
+                echo "Merging files in $folder into $output_file..."
+                "$GTP_CORE_EXEC" Merge "$folder" "$output_file"
+            fi
+        done
+        echo "HDF5 merge completed for $dataset_type."
 
-            echo "Merging files in $folder into $output_file..."
-            "$GTP_CORE_EXEC" Merge "$folder" "$output_file"
-        fi
-    done
-    echo "HDF5 merge completed for $dataset_type."
+    else
+        echo "Merging HDF5 files for each subdirectory in $OUTPUT_BASE_DIR/$dataset_type..."
+        "$GTP_CORE_EXEC" Merge "$OUTPUT_BASE_DIR"/$1 "$MERGE_DIR"/$1.h5
+        echo "HDF5 merge completed for $dataset_type."
+    fi
+
 }
 
 # Main script logic

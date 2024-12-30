@@ -4,6 +4,7 @@ import h5py
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import bisect
 from torch.optim.lr_scheduler import StepLR
@@ -67,9 +68,6 @@ class GoDataset(Dataset):
             idx += 1
 
     def __len__(self):
-        print("\nCalculating length of dataset...")
-        if self.type == "test":
-            return 209083
 
         length = 0
         for group in self.group_names:
@@ -106,6 +104,9 @@ class GoDataset(Dataset):
         # Combine board and liberty into a single NumPy array and then convert to Tensor
         ones = np.ones((19, 19), dtype=np.float32)
         zeros = np.zeros((19, 19), dtype=np.float32)
+
+        # Enhance data
+        board, liberty, label = random_augment(board, liberty, label, board_size=19)
 
         combined_array = np.stack(
             [board,
@@ -147,7 +148,7 @@ class GoNet(nn.Module):
         x = self.output_conv(x)
         # 输出概率分布（flatten 为 [batch_size, 361]，然后应用 softmax）
         x = x.view(x.size(0), -1)  # Flatten to [batch_size, 361]
-        x = self.softmax(x)  # Apply softmax to get probabilities
+        # x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
 def initialize_weights(model, seed=42):
@@ -182,6 +183,7 @@ def calculate_accuracy(model, test_data, batch_size):
             label_batch = labels[start_idx:end_idx]
 
             outputs = model(input_batch)
+            outputs = F.log_softmax(outputs, dim=1)
             _, predicted = torch.max(outputs, 1)
             target_indices = label_batch[:, 0] * 19 + label_batch[:, 1]
 
@@ -205,6 +207,15 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
     train_accuracy_history = []
     test_accuracy_history = []
 
+    accuracy = calculate_accuracy(model, test_data, batch_size=512)
+    print_green(f"Initial accuracy: {accuracy:.10f}")
+    last_accuracy = accuracy
+    test_accuracy_history.append(accuracy)
+    train_accuracy_history.append(0)
+    save_accuracy_plot(train_accuracy_history, test_accuracy_history)
+
+    file_count = 0
+
     for epoch in range(max_epoch):
         for h5_file in h5_files:
             print_blue(">>> Train: Loading from file: " + str(h5_file))
@@ -214,7 +225,7 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
                                             batch_size=128,
                                             shuffle=True,
                                             device=device,
-                                            num_workers=12,
+                                            num_workers=6,
                                             pin_memory=True)
 
             print_blue(">>> Train: Data loaded, training on " + str(device) + "...")
@@ -235,9 +246,11 @@ def train(model, test_data, criterion, optimizer, max_epoch, device):
             del train_dataset
             del train_loader
             gc.collect()
+            file_count += 1
+            if file_count % 10 == 0:
+                scheduler.step()
 
         print_green(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
-        scheduler.step()
 
 
 def train_one_file(model, train_loader, criterion, optimizer, device):
@@ -260,7 +273,7 @@ def train_one_file(model, train_loader, criterion, optimizer, device):
         total_correct += (predicted == target_indices).sum().item()
         total_samples += labels.size(0)
 
-        if batch_idx % 200 == 0:
+        if batch_idx % 1000 == 0:
             print("\033[94m#\033[00m", end='', flush=True)
 
     avg_loss = total_loss / (batch_idx + 1)
@@ -304,6 +317,51 @@ def load_checkpoint(model, optimizer, checkpoint_path="checkpoint.pth"):
         print("No checkpoint found, starting from scratch.")
         return 0
 
+def random_augment(board, liberty, label, board_size=19):
+
+    k = np.random.choice([0, 1, 2, 3])
+
+    aug_board = np.rot90(board, k=k)
+    aug_liberty = np.rot90(liberty, k=k)
+    aug_label = rotate_label(label, k, board_size)
+    flip_type = np.random.choice(["none", "horizontal", "vertical"])
+
+    if flip_type == "horizontal":
+        aug_board = np.fliplr(aug_board)
+        aug_liberty = np.fliplr(aug_liberty)
+        aug_label = flip_label(aug_label, flip_type, board_size)
+
+    elif flip_type == "vertical":
+        aug_board = np.flipud(aug_board)
+        aug_liberty = np.flipud(aug_liberty)
+        aug_label = flip_label(aug_label, flip_type, board_size)
+
+    return aug_board, aug_liberty, aug_label
+
+
+def rotate_label(label, k, board_size=19):
+
+    row, col = label
+    if k == 0:
+        return np.array([row, col], dtype=np.int64)
+    elif k == 1:
+        return np.array([col, board_size - 1 - row], dtype=np.int64)
+    elif k == 2:
+        return np.array([board_size - 1 - row, board_size - 1 - col], dtype=np.int64)
+    elif k == 3:
+        return np.array([board_size - 1 - col, row], dtype=np.int64)
+
+def flip_label(label, flip_type, board_size=19):
+
+    row, col = label
+    if flip_type == "horizontal":
+        return np.array([row, board_size - 1 - col], dtype=np.int64)
+    elif flip_type == "vertical":
+        return np.array([board_size - 1 - row, col], dtype=np.int64)
+    else:
+        return label
+
+
 
 if __name__ == "__main__":
     # Detect device availability
@@ -316,8 +374,6 @@ if __name__ == "__main__":
         print_red("GPU not available. Using CPU instead.")
 
     print_blue(f">>> Using device: {device}")
-
-    print_green(">>> File exist = " + str(os.path.exists('Dataset/board-move-pairs-train.h5')))
 
     print_blue(">>> Main: Loading dataset objects...")
     test_dataset = GoDataset('Dataset/test_0000.h5', 'test')
@@ -346,10 +402,10 @@ if __name__ == "__main__":
     model.apply(initialize_weights)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.00001, weight_decay=1e-5)
 
     print_blue(">>> Main: Start training...")
-    max_epoch = 100
+    max_epoch = 30
     train(model, test_data, criterion, optimizer, max_epoch, device=device)
 
     print_blue(">>> Main: Training finished. Saving model...")
