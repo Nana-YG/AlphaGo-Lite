@@ -236,7 +236,7 @@ def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, de
 
         print_blue(">>> Train: Evaluating on test set...")
         accuracy = calculate_accuracy(model, test_data, batch_size=512)
-        print_green(f"Test Accuracy after file {epoch + 1}: {accuracy:.10f}")
+        print_green(f"Test Accuracy after file {file_count + 1}: {accuracy:.10f}")
         if accuracy > last_accuracy:
             save_checkpoint(model, optimizer, epoch)
         last_accuracy = accuracy
@@ -314,6 +314,7 @@ def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.pn
     plt.legend()
     plt.grid()
     plt.savefig(filename)
+    plt.close()
     print(f"Accuracy plot saved as {filename}")
 
 def save_checkpoint(model, optimizer, epoch, checkpoint_path="checkpoint.pth"):
@@ -426,18 +427,15 @@ if __name__ == "__main__":
     print_blue(">>> Main: Start training...")
     max_epoch = 10
     optimizers = []
-    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.0001, momentum=0.9, weight_decay=1e-5))
-    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.000002, momentum=0.9, weight_decay=1e-4))
+    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.002, momentum=0.9, weight_decay=1e-4))
 
     schedulers = []
-    schedulers.append(StepLR(optimizers[0], step_size=2, gamma=0.90))
-    schedulers.append(StepLR(optimizers[1], step_size=1, gamma=0.98))
+    schedulers.append(StepLR(optimizers[1], step_size=1, gamma=0.95))
 
     for epoch in range(max_epoch):
-        if epoch == 0:
-            train_one_epoch(model, test_data, criterion, optimizers[0], schedulers[0], epoch, device=device, plot_loss=True)
-        else:
-            train_one_epoch(model, test_data, criterion, optimizers[1], schedulers[1], epoch, device=device, plot_loss=False)
+
+        train_one_epoch(model, test_data, criterion, optimizers[0], schedulers[0], epoch, device=device, plot_loss=False)
+        schedulers[0].step()
 
     print_blue(">>> Main: Training finished. Saving model...")
     torch.save(model.state_dict(), 'go_model.pth')
