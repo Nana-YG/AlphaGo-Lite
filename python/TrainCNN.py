@@ -125,28 +125,21 @@ class GoNet(nn.Module):
     def __init__(self):
         super(GoNet, self).__init__()
 
-        # 第一层卷积：输入通道 4，输出通道 192，卷积核大小 5x5，步幅 1，填充 2（保持尺寸）
-        self.conv1 = nn.Conv2d(in_channels=4, out_channels=192, kernel_size=5, stride=1, padding=2)
-        # 后续 11 层卷积：输入通道 192，输出通道 192，卷积核大小 3x3，步幅 1，填充 1（保持尺寸）
+        self.conv1 = nn.Conv2d(in_channels=4, out_channels=256, kernel_size=5, stride=1, padding=2)
         self.hidden_convs = nn.Sequential(
-            *[nn.Conv2d(in_channels=192, out_channels=192, kernel_size=3, stride=1, padding=1) for _ in range(11)]
+            *[nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1) for _ in range(18)]
         )
-        # 输出层：1x1 卷积，输入通道 192，输出通道 1（对应棋盘每个位置的概率）
-        self.output_conv = nn.Conv2d(in_channels=192, out_channels=1, kernel_size=1, stride=1, padding=0)
-        # 激活函数
+        self.output_conv = nn.Conv2d(in_channels=256, out_channels=1, kernel_size=1, stride=1, padding=0)
         self.relu = nn.ReLU()
-        # Softmax 层：在 2D 平面上按每个位置归一化概率
+
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
-        # 第一层卷积 + ReLU
+
         x = self.relu(self.conv1(x))
-        # 11 层隐藏卷积 + ReLU
         for conv in self.hidden_convs:
             x = self.relu(conv(x))
-        # 最后一层卷积
         x = self.output_conv(x)
-        # 输出概率分布（flatten 为 [batch_size, 361]，然后应用 softmax）
         x = x.view(x.size(0), -1)  # Flatten to [batch_size, 361]
         # x = self.softmax(x)  # Apply softmax to get probabilities
         return x
@@ -155,17 +148,14 @@ def initialize_weights(model, seed=42):
     torch.manual_seed(seed)
     for layer in model.modules():
         if isinstance(layer, nn.Conv2d):
-            # Kaiming初始化适合ReLU激活函数
             init.kaiming_uniform_(layer.weight, mode='fan_out', nonlinearity='relu')
             if layer.bias is not None:
                 init.zeros_(layer.bias)
         elif isinstance(layer, nn.Linear):
-            # Xavier初始化适合Sigmoid/Tanh等
             init.xavier_uniform_(layer.weight)
             if layer.bias is not None:
                 init.zeros_(layer.bias)
         elif isinstance(layer, nn.BatchNorm2d):
-            # 批归一化层权重为1，偏置为0
             init.ones_(layer.weight)
             init.zeros_(layer.bias)
 
@@ -195,9 +185,18 @@ def calculate_accuracy(model, test_data, batch_size):
 
 
 # Training function
-def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, device, plot_loss):
-    global last_accuracy
-    last_accuracy = 0.0
+def train_one_epoch(model,
+                    test_data,
+                    criterion,
+                    optimizer,
+                    epoch,
+                    device,
+                    plot_loss,
+                    train_accuracy_history,
+                    test_accuracy_history,
+                    loss_history):
+    global max_accuracy
+    max_accuracy = 0.0
 
     folder_path = "Dataset/train/"
     h5_files = [f for f in os.listdir(folder_path) if f.endswith('.h5')]
@@ -208,7 +207,6 @@ def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, de
 
     accuracy = calculate_accuracy(model, test_data, batch_size=512)
     print_green(f"Initial accuracy: {accuracy:.10f}")
-    last_accuracy = accuracy
     test_accuracy_history.append(accuracy)
     train_accuracy_history.append(0)
     save_accuracy_plot(train_accuracy_history, test_accuracy_history)
@@ -237,9 +235,9 @@ def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, de
         print_blue(">>> Train: Evaluating on test set...")
         accuracy = calculate_accuracy(model, test_data, batch_size=512)
         print_green(f"Test Accuracy after file {file_count + 1}: {accuracy:.10f}")
-        if accuracy > last_accuracy:
+        if accuracy > max_accuracy:
             save_checkpoint(model, optimizer, epoch)
-        last_accuracy = accuracy
+            max_accuracy = accuracy
 
         test_accuracy_history.append(accuracy)
         save_accuracy_plot(train_accuracy_history, test_accuracy_history)
@@ -248,7 +246,6 @@ def train_one_epoch(model, test_data, criterion, optimizer, scheduler, epoch, de
         del train_loader
         gc.collect()
         file_count += 1
-        scheduler.step()
 
     print_green(f"Test Accuracy after Epoch {epoch + 1}: {accuracy:.10f}")
 
@@ -428,14 +425,40 @@ if __name__ == "__main__":
     max_epoch = 10
     optimizers = []
     optimizers.append(torch.optim.SGD(model.parameters(), lr=0.002, momentum=0.9, weight_decay=1e-4))
+    optimizers.append(torch.optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-5))
 
     schedulers = []
+    schedulers.append(StepLR(optimizers[0], step_size=2, gamma=0.95))
     schedulers.append(StepLR(optimizers[1], step_size=1, gamma=0.95))
 
-    for epoch in range(max_epoch):
+    train_accuracy_history = []
+    test_accuracy_history = []
+    loss_history = []
 
-        train_one_epoch(model, test_data, criterion, optimizers[0], schedulers[0], epoch, device=device, plot_loss=False)
-        schedulers[0].step()
+    for epoch in range(max_epoch):
+        if epoch == 0:
+            train_one_epoch(model,
+                            test_data,
+                            criterion,
+                            optimizers[0],
+                            epoch,
+                            device=device,
+                            plot_loss=True,
+                            train_accuracy_history = train_accuracy_history,
+                            test_accuracy_history = test_accuracy_history,
+                            loss_history = loss_history)
+        else:
+            train_one_epoch(model,
+                            test_data,
+                            criterion,
+                            optimizers[1],
+                            epoch,
+                            device=device,
+                            plot_loss=False,
+                            train_accuracy_history = train_accuracy_history,
+                            test_accuracy_history = test_accuracy_history,
+                            loss_history = loss_history)
+            schedulers[1].step()
 
     print_blue(">>> Main: Training finished. Saving model...")
     torch.save(model.state_dict(), 'go_model.pth')
