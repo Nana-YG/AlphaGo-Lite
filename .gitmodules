@@ -1,0 +1,3 @@
+[submodule "GoGame-Core"]
+	path = GoGame-Core
+	url = https://github.com/Nana-YG/GoGame-Core.git
