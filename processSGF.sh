@@ -7,7 +7,7 @@
 INPUT_BASE_DIR="./rawData/sgf"    # Input SGF root directory
 OUTPUT_BASE_DIR="./rawData/h5"    # Output HDF5 root directory
 MERGE_DIR="./Dataset" # Merged HDF5 directory
-GTP_CORE_EXEC="./cpp/GTP-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
+GTP_CORE_EXEC="./GoGame-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
 
 # Ensure GTP-Core exists
 if [[ ! -f "$GTP_CORE_EXEC" ]]; then
