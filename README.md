@@ -16,7 +16,6 @@
 
 ### Clone the Repository
 ```bash
-# Clone the repository
 git clone https://github.com/yourusername/AlphaGo-Lite.git
 cd AlphaGo-Lite
 ```
