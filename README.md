@@ -141,7 +141,7 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 ## Acknowledgments
 
 - Inspired by [DeepMind's AlphaGo](https://deepmind.com/research/highlighted-research/alphago).
-- Built with love for the Go community.
+- Built with love for the Go community and all human/AI players.
 
 ---
 
