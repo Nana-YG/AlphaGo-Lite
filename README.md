@@ -57,13 +57,15 @@ pip install h5py matplotlib numpy
 
 1. I recommend: [Joe's Go Datebase](https://pjreddie.com/projects/jgdb/)
 2. If you downloaded the dataset from recommended site, un-zip the downloaded file under root directory and change directory name to "rawData". There are about 500,000 files, organized in sub-folder, each containing 1000 files.
-3. If you prepared your own dataset, place your SGF datasets in the `RawData/sgf` directory and divide your dataset to "RawData/sgf/train" and "RawData/sgf/test" 
-4. Use the provided Bash scripts to preprocess and merge datasets:
+3. If you prepared your own dataset, place your SGF datasets in the `RawData/sgf` directory and divide your dataset to "RawData/sgf/train" and "RawData/sgf/test"
+4. The SGF files cannot be directly used by the neural net, so they have to be processed to matrices.
+5. Use the provided Bash scripts to preprocess and merge datasets:
    ```bash
    ./processSGF.sh process
    ./processSGF.sh merge train
    ./processSGF.sh merge test
    ```
+   Notice that it may take up to a few days to process.
 
 ## Usage
 
