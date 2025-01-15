@@ -4,13 +4,27 @@
 
 **AlphaGo-Lite** is a simplified implementation of an AI Go player inspired by AlphaGo. It leverages a deep learning-based approach for predicting moves on a 19x19 Go board. This project combines ONNX-based inference with custom Go game logic to provide a lightweight yet powerful Go-playing AI engine.
 
-## Features
+## Pinciple
 
-- **Deep Learning Inference**: Supports ONNX models for efficient move prediction.
-- **Customizable Game Core**: Built on a modular GTP core for Go game logic.
-- **Training Pipeline**: Includes scripts for preprocessing SGF files, training neural networks, and exporting ONNX models.
-- **Flexible File Support**: Handles HDF5 datasets and exports Go positions as `.npy` files.
-- **Interactive Gameplay**: Play against the AI with real-time predictions.
+The original paper published by DeepMind: [Nature: Mastering the game of Go with deep neural networks and tree search](https://www.nature.com/articles/nature16961)
+
+Similarly, we use deep convolutional neural networks to enable complex inference. In one sentence, AlphaGo takes a 19x19x48 tensor as input, that is 46 information matrices + a zero-matrix + a one-matrix, but AlphaGo-Lite takes only 2 information matrices + a zero-matrix + a one-matrix. That makes AlphaGo-Lite **24 times** more light-weighted than AlphaGo. 
+
+### Training
+
+The training of AlphaGO-Lite has 3 phases:
+
+#### Phase 1: Supervised Learning
+
+The goal is to mimic the moves of human experts. The neural network learns to predict the probability distribution of a human expert’s next move based on the current game board, represented as the probability of playing at each point on the board. Supervised learning serves as a foundation, enabling the model to quickly achieve an acceptable performance.
+
+#### Phase 2: Reinforcement Learning
+
+In this phase, AlphaGo-Lite plays against itself. Each game provides feedback in the form of rewards (e.g., winning or losing the match), enabling the model to discover better policies and optimize its decision-making process. Because we want AlphaGo-Lite to be better than human players, the self-play games help the model transcend human-like play and develop more advanced policies.
+
+#### Phase 3: Value Network
+
+The final phase introduces the value network, which estimates the probability of winning from any given board position. Unlike the policy network, which predicts the next move, the value network evaluates the entire board. This provides a deeper understanding of the game dynamics, allowing the model to assess long-term strategies and outcomes. The value network is trained using the outcomes of self-play games, learning to map board states to their eventual results. This network will finally be used in the Monte-Carlo Tree Search (MCTS) to choose the move that leads to the highest chance to win. 
 
 ## Installation
 
