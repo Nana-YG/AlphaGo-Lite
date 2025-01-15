@@ -1,2 +1,11 @@
+.idea/
+Dataset/
+RawData/
+__pycache__/
+checkpoint.pth
+cpp/cmake-build-debug/
+gonet.onnx
+nohup.out
+python/__pycache__/
 /interval_losses.png
 /accuracy_plot.png
