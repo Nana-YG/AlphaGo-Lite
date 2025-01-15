@@ -4,8 +4,8 @@
 # For 'test', 'train', and 'val' datasets
 
 # Directories
-INPUT_BASE_DIR="./rawData/sgf"    # Input SGF root directory
-OUTPUT_BASE_DIR="./rawData/h5"    # Output HDF5 root directory
+INPUT_BASE_DIR="./RawData/sgf"    # Input SGF root directory
+OUTPUT_BASE_DIR="./RawData/h5"    # Output HDF5 root directory
 MERGE_DIR="./Dataset" # Merged HDF5 directory
 GTP_CORE_EXEC="./GoGame-Core/cpp/build/GTP-Core" # Path to GTP-Core executable
 
