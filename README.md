@@ -26,6 +26,11 @@ In this phase, AlphaGo-Lite plays against itself. Each game provides feedback in
 
 The final phase introduces the value network, which estimates the probability of winning from any given board position. Unlike the policy network, which predicts the next move, the value network evaluates the entire board. This provides a deeper understanding of the game dynamics, allowing the model to assess long-term strategies and outcomes. The value network is trained using the outcomes of self-play games, learning to map board states to their eventual results. This network will finally be used in the Monte-Carlo Tree Search (MCTS) to choose the move that leads to the highest chance to win. 
 
+### Dicision Making
+
+#### Monte-Carlo Tree Search (MCTS)
+
+Monte-Carlo Tree Search (MCTS) is the decision-making engine in AlphaGo-Lite, using the value networks to evaluate moves and select the most promising ones.
 ## Installation
 
 ### Clone the Repository
