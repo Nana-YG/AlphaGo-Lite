@@ -8,9 +8,9 @@
 
 The original paper published by DeepMind: [Nature: Mastering the game of Go with deep neural networks and tree search](https://www.nature.com/articles/nature16961)
 
-![AlphaGo vs. AlphaGo-Lite](images/AlphaGO-vs-Lite.png)
-
 Similarly, we use deep convolutional neural networks to enable complex inference. In one sentence, AlphaGo takes a 19x19x48 tensor as input, that is 46 information matrices + a zero-matrix + a one-matrix, but AlphaGo-Lite takes only 2 information matrices + a zero-matrix + a one-matrix. That makes AlphaGo-Lite **24 times** more light-weighted than AlphaGo. 
+
+![AlphaGo vs. AlphaGo-Lite](images/AlphaGO-vs-Lite.png)
 
 ### Training
 
