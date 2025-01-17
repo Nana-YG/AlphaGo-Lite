@@ -6,7 +6,7 @@
 
 **Why re-building AlphaGo in 2025?** 
 
-The training of AlphaGo originally used **50 GPUs** and took 3 weeks of time. This project can be trained on a PC with a single higher-division GPU. This project serves a practice and educational purpose. Implementation guidance and comments in source code will be provided once I finish this project myself. 
+The training of AlphaGo originally used **50 GPUs** and took 3 weeks of time in 2016. This project can be trained on a PC with a single higher-division GPU within a few weeks. This project serves a practice and educational purpose. Implementation guidance and comments in source code will be provided once I finish this project myself. 
 
 ## Pinciple
 
