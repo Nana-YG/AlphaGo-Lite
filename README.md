@@ -2,7 +2,11 @@
 
 # AlphaGo-Lite
 
-**AlphaGo-Lite** is a simplified implementation of an AI Go player inspired by AlphaGo. It leverages a deep learning-based approach for predicting moves on a 19x19 Go board. This project combines ONNX-based inference with custom Go game logic to provide a lightweight yet powerful Go-playing AI engine.
+**AlphaGo-Lite** is a simplified implementation of an AI Go player inspired by AlphaGo, providing a lightweight yet powerful Go-playing AI engine.
+
+**Why re-building AlphaGo in 2025?** 
+
+The training of AlphaGo originally used **50 GPUs** and took 3 weeks of time. This project can be trained on a PC with a single higher-division GPU. This project serves a practice and educational purpose. Implementation guidance and comments in source code will be provided once I finish this project myself. 
 
 ## Pinciple
 
