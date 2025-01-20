@@ -3,7 +3,6 @@ import os
 import h5py
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import bisect
@@ -11,7 +10,6 @@ from torch.optim.lr_scheduler import StepLR
 import torch.nn.init as init
 import matplotlib.pyplot as plt
 import numpy as np
-import random
 
 from Utils import (
     print_blue,
@@ -32,6 +30,7 @@ class DeviceDataLoader(DataLoader):
 
 class GoDataset(Dataset):
     def __init__(self, h5_file, type):
+
         self.type = type
         self.h5_file = h5py.File(h5_file, 'r')
         self.group_names = list(self.h5_file.keys())
@@ -60,17 +59,9 @@ class GoDataset(Dataset):
             if idx % 100 == 0:
                 print('#', end='', flush=True)
             group = self.h5_file[group_name]
-            liberty_inversed = {}
-            for key in group:
-                if key.startswith("liberty"):
-                    # Convert data type
-                    liberty_raw = group[key][:].astype(np.float32)
-                    # Take inverse to non-zero terms
-                    liberty_inversed[key] = np.where(liberty_raw != 0, 1.0 / liberty_raw, 0.0)
-
             self.cache[group_name] = {
                 "boards": {key: group[key][:] for key in group if key.startswith("board")},
-                "liberties": liberty_inversed,
+                "liberties": {key: group[key][:] for key in group if key.startswith("liberty")},
                 "labels": {key: group[key][:] for key in group if key.startswith("nextMove")},
             }
             idx += 1
@@ -97,11 +88,14 @@ class GoDataset(Dataset):
         try:
             board = self.cache[group_name]["boards"][f"board_{local_idx}"]
             liberty = self.cache[group_name]["liberties"][f"liberty_{local_idx}"]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                liberty_inverse = np.where(liberty != 0, 1.0 / liberty, 0.0)
             label = self.cache[group_name]["labels"][f"nextMove_{local_idx}"]
         except Exception as e:
             # Use default values in case of error
             board = np.zeros((19, 19), dtype=np.float32)
             liberty = np.zeros((19, 19), dtype=np.float32)
+            liberty_inverse = np.zeros((19, 19), dtype=np.float32)
             label = np.array([3, 3], dtype=np.int64)
 
         if board.shape != (19, 19):
@@ -114,18 +108,67 @@ class GoDataset(Dataset):
         zeros = np.zeros((19, 19), dtype=np.float32)
 
         # Enhance data
-        board, liberty, label = random_augment(board, liberty, label, board_size=19)
+        board, liberty, liberty_inverse, label = random_augment(board, liberty, liberty_inverse, label, board_size=19)
 
         combined_array = np.stack(
             [board,
              liberty,
+             liberty_inverse,
              ones,
              zeros],
-            axis=0)  # Shape: (4, 19, 19)
+            axis=0)  # Shape: (5, 19, 19)
         input_tensor = torch.from_numpy(combined_array).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
 
         return input_tensor, label_tensor
+
+
+def random_augment(board, liberty, liberty_inverse, label, board_size=19):
+
+    k = np.random.choice([0, 1, 2, 3])
+
+    aug_board = np.rot90(board, k=k)
+    aug_liberty = np.rot90(liberty, k=k)
+    aug_liberty_inverse = np.rot90(liberty_inverse, k=k)
+    aug_label = rotate_label(label, k, board_size)
+    flip_type = np.random.choice(["none", "horizontal", "vertical"])
+
+    if flip_type == "horizontal":
+        aug_board = np.fliplr(aug_board)
+        aug_liberty = np.fliplr(aug_liberty)
+        aug_liberty_inverse = np.fliplr(aug_liberty_inverse)
+        aug_label = flip_label(aug_label, flip_type, board_size)
+
+    elif flip_type == "vertical":
+        aug_board = np.flipud(aug_board)
+        aug_liberty = np.flipud(aug_liberty)
+        aug_liberty_inverse = np.flipud(aug_liberty_inverse)
+        aug_label = flip_label(aug_label, flip_type, board_size)
+
+    return aug_board, aug_liberty, aug_liberty_inverse, aug_label
+
+
+def rotate_label(label, k, board_size=19):
+
+    row, col = label
+    if k == 0:
+        return np.array([row, col], dtype=np.int64)
+    elif k == 1:
+        return np.array([col, board_size - 1 - row], dtype=np.int64)
+    elif k == 2:
+        return np.array([board_size - 1 - row, board_size - 1 - col], dtype=np.int64)
+    elif k == 3:
+        return np.array([board_size - 1 - col, row], dtype=np.int64)
+
+def flip_label(label, flip_type, board_size=19):
+
+    row, col = label
+    if flip_type == "horizontal":
+        return np.array([row, board_size - 1 - col], dtype=np.int64)
+    elif flip_type == "vertical":
+        return np.array([board_size - 1 - row, col], dtype=np.int64)
+    else:
+        return label
 
 
 # Define the neural network
@@ -133,7 +176,7 @@ class GoNet(nn.Module):
     def __init__(self):
         super(GoNet, self).__init__()
 
-        self.conv1 = nn.Conv2d(in_channels=4, out_channels=256, kernel_size=5, stride=1, padding=2)
+        self.conv1 = nn.Conv2d(in_channels=5, out_channels=256, kernel_size=5, stride=1, padding=2)
         self.hidden_convs = nn.Sequential(
             *[nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1) for _ in range(20)]
         )
@@ -144,7 +187,7 @@ class GoNet(nn.Module):
 
     def forward(self, x):
 
-        x = self.conv1(x)
+        x = self.relu(self.conv1(x))
         for conv in self.hidden_convs:
             x = self.relu(conv(x))
         x = self.output_conv(x)
@@ -152,7 +195,7 @@ class GoNet(nn.Module):
         # x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
-def initialize_weights(model, seed=42):
+def initialize_weights(model, seed=48):
     torch.manual_seed(seed)
     for layer in model.modules():
         if isinstance(layer, nn.Conv2d):
@@ -338,50 +381,6 @@ def load_checkpoint(model, optimizer, checkpoint_path="checkpoint.pth"):
     else:
         print("No checkpoint found, starting from scratch.")
         return 0
-
-def random_augment(board, liberty, label, board_size=19):
-
-    k = np.random.choice([0, 1, 2, 3])
-
-    aug_board = np.rot90(board, k=k)
-    aug_liberty = np.rot90(liberty, k=k)
-    aug_label = rotate_label(label, k, board_size)
-    flip_type = np.random.choice(["none", "horizontal", "vertical"])
-
-    if flip_type == "horizontal":
-        aug_board = np.fliplr(aug_board)
-        aug_liberty = np.fliplr(aug_liberty)
-        aug_label = flip_label(aug_label, flip_type, board_size)
-
-    elif flip_type == "vertical":
-        aug_board = np.flipud(aug_board)
-        aug_liberty = np.flipud(aug_liberty)
-        aug_label = flip_label(aug_label, flip_type, board_size)
-
-    return aug_board, aug_liberty, aug_label
-
-
-def rotate_label(label, k, board_size=19):
-
-    row, col = label
-    if k == 0:
-        return np.array([row, col], dtype=np.int64)
-    elif k == 1:
-        return np.array([col, board_size - 1 - row], dtype=np.int64)
-    elif k == 2:
-        return np.array([board_size - 1 - row, board_size - 1 - col], dtype=np.int64)
-    elif k == 3:
-        return np.array([board_size - 1 - col, row], dtype=np.int64)
-
-def flip_label(label, flip_type, board_size=19):
-
-    row, col = label
-    if flip_type == "horizontal":
-        return np.array([row, board_size - 1 - col], dtype=np.int64)
-    elif flip_type == "vertical":
-        return np.array([board_size - 1 - row, col], dtype=np.int64)
-    else:
-        return label
 
 
 
