@@ -60,9 +60,17 @@ class GoDataset(Dataset):
             if idx % 100 == 0:
                 print('#', end='', flush=True)
             group = self.h5_file[group_name]
+            liberty_inversed = {}
+            for key in group:
+                if key.startswith("liberty"):
+                    # Convert data type
+                    liberty_raw = group[key][:].astype(np.float32)
+                    # Take inverse to non-zero terms
+                    liberty_inversed[key] = np.where(liberty_raw != 0, 1.0 / liberty_raw, 0.0)
+
             self.cache[group_name] = {
                 "boards": {key: group[key][:] for key in group if key.startswith("board")},
-                "liberties": {key: group[key][:] for key in group if key.startswith("liberty")},
+                "liberties": liberty_inversed,
                 "labels": {key: group[key][:] for key in group if key.startswith("nextMove")},
             }
             idx += 1
@@ -127,7 +135,7 @@ class GoNet(nn.Module):
 
         self.conv1 = nn.Conv2d(in_channels=4, out_channels=256, kernel_size=5, stride=1, padding=2)
         self.hidden_convs = nn.Sequential(
-            *[nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1) for _ in range(18)]
+            *[nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1) for _ in range(20)]
         )
         self.output_conv = nn.Conv2d(in_channels=256, out_channels=1, kernel_size=1, stride=1, padding=0)
         self.relu = nn.ReLU()
@@ -136,7 +144,7 @@ class GoNet(nn.Module):
 
     def forward(self, x):
 
-        x = self.relu(self.conv1(x))
+        x = self.conv1(x)
         for conv in self.hidden_convs:
             x = self.relu(conv(x))
         x = self.output_conv(x)
@@ -200,10 +208,6 @@ def train_one_epoch(model,
 
     folder_path = "Dataset/train/"
     h5_files = [f for f in os.listdir(folder_path) if f.endswith('.h5')]
-
-    train_accuracy_history = []
-    test_accuracy_history = []
-    loss_history = []
 
     accuracy = calculate_accuracy(model, test_data, batch_size=512)
     print_green(f"Initial accuracy: {accuracy:.10f}")
@@ -287,7 +291,7 @@ def train_one_file(model, train_loader, criterion, optimizer):
 
 def save_loss_plot(loss_history):
     if len(loss_history) > 0:
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(20, 8))
         indices = range(1, len(loss_history) + 1)
         plt.plot(indices, loss_history, label='Interval Avg Loss')
         plt.xlabel('Batch Index')
@@ -300,7 +304,7 @@ def save_loss_plot(loss_history):
 
 
 def save_accuracy_plot(train_accuracy, test_accuracy, filename="accuracy_plot.png"):
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(20, 8))
     epochs = range(0, len(train_accuracy))
 
     plt.plot(epochs, train_accuracy, label="Train Accuracy", linestyle="-")
@@ -461,5 +465,5 @@ if __name__ == "__main__":
             schedulers[1].step()
 
     print_blue(">>> Main: Training finished. Saving model...")
-    torch.save(model.state_dict(), 'go_model.pth')
+    torch.save(model.state_dict(), 'final_net.pth')
     print_blue(">>> Main: Model saved.")
