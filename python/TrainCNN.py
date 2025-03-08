@@ -195,18 +195,19 @@ class GoNet(nn.Module):
         # x = self.softmax(x)  # Apply softmax to get probabilities
         return x
 
-def initialize_weights(model, seed=48):
+def initialize_weights(model, seed=42, bias_value = 1e-5):
     torch.manual_seed(seed)
     for layer in model.modules():
         if isinstance(layer, nn.Conv2d):
             init.kaiming_uniform_(layer.weight, mode='fan_out', nonlinearity='relu')
             if layer.bias is not None:
-                init.zeros_(layer.bias)
+                init.constant_(layer.bias, bias_value)
         elif isinstance(layer, nn.Linear):
             init.xavier_uniform_(layer.weight)
             if layer.bias is not None:
-                init.zeros_(layer.bias)
+                init.constant_(layer.bias, bias_value)
         elif isinstance(layer, nn.BatchNorm2d):
+            print("BatchNorm2D")
             init.ones_(layer.weight)
             init.zeros_(layer.bias)
 
@@ -255,7 +256,7 @@ def train_one_epoch(model,
     accuracy = calculate_accuracy(model, test_data, batch_size=512)
     print_green(f"Initial accuracy: {accuracy:.10f}")
     test_accuracy_history.append(accuracy)
-    train_accuracy_history.append(0)
+    train_accuracy_history.append(accuracy)
     save_accuracy_plot(train_accuracy_history, test_accuracy_history)
 
     file_count = 0
